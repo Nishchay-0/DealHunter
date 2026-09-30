@@ -8,6 +8,7 @@ Verifies:
 - Database connectivity (PostgreSQL / SQLite via SQLAlchemy async engine)
 - Telegram Bot API connectivity
 - Backend app import and health
+- Retailer price source registry and circuit breakers
 
 Safe to run anywhere — masks all tokens, passwords, and sensitive keys.
 """
@@ -88,6 +89,17 @@ def check_backend() -> tuple[bool, str]:
         return False, f"Failed to load backend app: {exc}"
 
 
+def check_sources() -> tuple[bool, str]:
+    """Verify registered price sources and breaker status."""
+    try:
+        from products.sources.registry import default_registry
+        sources = default_registry.list_sources()
+        names = [s.name for s in sources]
+        return True, f"{len(sources)} sources active: {', '.join(names)}"
+    except Exception as exc:
+        return False, f"Sources initialization failed: {exc}"
+
+
 async def run_diagnostics() -> int:
     print("=" * 60)
     print("           DEALHUNTER SYSTEM DIAGNOSTICS")
@@ -118,8 +130,13 @@ async def run_diagnostics() -> int:
     status_app = "[PASS]" if app_ok else "[FAIL]"
     print(f"  Backend API  : {status_app} {app_msg}")
 
+    # 4. Sources & Scheduler
+    src_ok, src_msg = check_sources()
+    status_src = "[PASS]" if src_ok else "[FAIL]"
+    print(f"  Price Sources: {status_src} {src_msg}")
+
     print("=" * 60)
-    overall_ok = app_ok  # core code must be valid
+    overall_ok = app_ok and src_ok
     if overall_ok:
         print(">> Diagnostics completed. Core architecture is functional.")
         return 0

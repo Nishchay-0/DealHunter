@@ -7,7 +7,7 @@ A Telegram-first deal and price-drop alert platform.
 ## Current Status
 
 ```
-Phase 3 Complete — Product Tracking Engine (Amazon, Flipkart, Croma, Myntra) & Live Telegram Integration
+Phase 4 Complete — Scheduler, Price-Drop Detection & Multi-Channel Notification Layer
 ```
 
 ---
@@ -21,11 +21,25 @@ Phase 3 Complete — Product Tracking Engine (Amazon, Flipkart, Croma, Myntra) &
   * **Flipkart** (`flipkart.com`): Extracts PID, item metadata, listed price, bank offers, and stock status.
   * **Croma** (`croma.com`): Extracts product code, catalog metadata, price, and availability.
   * **Myntra** (`myntra.com`): Extracts style ID, product name, price, and availability.
+* **Scheduler & Reliability**:
+  * **Dynamic Check Intervals**: 30 min post-drop monitoring, 1h for popular products (>2 watchers), 6h standard.
+  * **Circuit Breakers**: Per-source rolling window failure counters protecting against bans and rate-limits.
+  * **Observation Idempotency**: Suppresses duplicate price records when prices and offers remain unchanged.
+  * **Exponential Backoff**: Automatic retry for transient retailer timeouts.
+* **Multi-Channel Notification Layer**:
+  * **Channel Adapters**: Telegram and official Meta WhatsApp Business Cloud API.
+  * **Single Message Renderer**: Universal explainability block, price change diff, stackable offers, and mandatory disclaimer caveat.
+  * **Guardrails**:
+    * *Deduplication*: Never alerts on unchanged prices.
+    * *Per-Product Cooldown*: Configurable cooldown (default 6h) prevents alert spam.
+    * *Timezone Quiet Hours*: Suppresses alerts during user-configured quiet hours.
+    * *Daily Message Cap*: Global outbound threshold per user (default 20/day).
+    * *Audit Trails*: Every outbound message recorded in `alerts_sent`.
 * **Database & Price History**: SQLAlchemy 2.0 async ORM tracking products, historical price observations, effective prices, and user watchlists.
 * **Alembic Migrations**: Fully async schema migrations.
 * **Backend API**: FastAPI foundation with `/health` liveness probe.
 * **System Diagnostics**: Safe CLI diagnostics tool (`scripts/diagnose.py`) with masked credentials.
-* **Automated Offline Tests**: 21 unit and integration tests passing 100% offline using `pytest` and in-memory SQLite.
+* **Automated Offline Tests**: 32 unit and integration tests passing 100% offline using `pytest` and in-memory SQLite.
 
 ---
 
@@ -138,6 +152,13 @@ DealHunter/
 │   ├── base.py                   # Declarative base
 │   ├── models.py                 # SQLAlchemy 2.0 ORM models
 │   └── session.py                # Async engine & session factory
+├── notifications/                # Notification & alert delivery
+│   ├── base.py                   # Notifier ABC
+│   ├── dispatcher.py             # Guardrails (cooldown, quiet hours, cap, dedup)
+│   ├── models.py                 # AlertPayload dataclass
+│   ├── renderer.py               # Markdown alert builder with caveats
+│   ├── telegram.py               # Telegram delivery adapter
+│   └── whatsapp.py               # Meta WhatsApp Cloud API adapter
 ├── products/                     # Product catalog & price tracking
 │   ├── models.py                 # ProductData & PriceObservation dataclasses
 │   ├── service.py                # ProductTrackingService (catalog + history)
@@ -148,13 +169,18 @@ DealHunter/
 │       ├── croma.py              # Croma adapter
 │       ├── myntra.py             # Myntra adapter
 │       └── registry.py           # URL → Source resolution
+├── scheduler/                    # Periodic price checks & triggers
+│   ├── circuit_breaker.py        # Failure monitoring & protection per source
+│   └── runner.py                 # Dynamic intervals, retries & drop triggers
 ├── scripts/                      # Operational utilities
 │   └── diagnose.py               # Masked system diagnostics
 ├── tests/                        # Offline automated test suite
 │   ├── api/                      # API contract tests
 │   ├── database/                 # ORM & database tests
 │   ├── fixtures/                 # Offline HTML retailer fixtures
+│   ├── notifications/            # Renderer & dispatcher guardrails tests
 │   ├── products/                 # Parser, registry & service tests
+│   ├── scheduler/                # Circuit breaker & runner tests
 │   └── conftest.py               # Async fixtures & in-memory DB
 ├── .env.example                  # Environment configuration template
 ├── .gitignore                    # Excludes secrets, cache, venv
@@ -173,8 +199,8 @@ DealHunter/
 | 1 | Telegram Bot Foundation (`/start`, `/help`) | ✅ Complete |
 | 2 | FastAPI + PostgreSQL/SQLite Models + Alembic Migrations | ✅ Complete |
 | 3 | Product Tracking (URL → Source Parser → Product Catalog → Current Price & History) | ✅ Complete |
-| 4 | Scheduler + Price-Drop Detection + Notifications | 🔜 Next (Awaiting Approval) |
-| 5 | Watchlist + Target Price + `/deals` | ⏳ Pending |
+| 4 | Scheduler + Price-Drop Detection + Notifications | ✅ Complete |
+| 5 | Watchlist + Target Price + `/deals` + Categories | 🔜 Next (Awaiting Approval) |
 | 6 | Deal Analysis Engine (Deal Score & Breakdown) | ⏳ Pending |
 | 7 | Coupons, Effective Price & Offer Stacking | ⏳ Pending |
 | 8 | Admin Dashboard & Monitoring | ⏳ Pending |
