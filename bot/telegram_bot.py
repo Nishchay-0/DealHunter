@@ -1,4 +1,4 @@
-﻿"""
+"""
 DealHunter - Telegram Bot
 Step 1: Project Foundation
 
@@ -49,12 +49,23 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 # Validation
 # ---------------------------------------------------------------------------
 
+PLACEHOLDER_TOKEN = "YOUR_BOT_TOKEN_HERE"
+
+
 def validate_config() -> None:
     """Validate required environment variables before starting the bot."""
     if not TOKEN:
         logger.error(
             "TELEGRAM_BOT_TOKEN is missing. "
-            "Please add it to your .env file and try again."
+            "Please set it in your .env file and try again."
+        )
+        sys.exit(1)
+
+    if TOKEN == PLACEHOLDER_TOKEN:
+        logger.error(
+            "TELEGRAM_BOT_TOKEN is still set to the placeholder value. "
+            "Replace 'YOUR_BOT_TOKEN_HERE' in .env with your real bot token "
+            "from @BotFather on Telegram."
         )
         sys.exit(1)
 
