@@ -1,12 +1,15 @@
 """
 DealHunter - Telegram Bot
-Step 3: Product Tracking Integration
+Phase 5: Watchlist, Target Prices & Deals Integration
 
 Features:
-- /start - Welcome & user onboarding
-- /help - Available commands
+- /start - Welcome & onboarding
+- /help - Full command guide
 - /track <url> - Track product from Amazon, Flipkart, Croma, or Myntra
-- Direct link message handling (paste any product URL directly)
+- /watchlist - View all tracked products
+- /target <product_id> <price> - Set target price
+- /deals [category] - Discover active price drops
+- /remove <product_id> - Untrack a product
 """
 
 from __future__ import annotations
@@ -37,7 +40,7 @@ load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 # ---------------------------------------------------------------------------
-# Logging - do NOT log the token or any secret
+# Logging
 # ---------------------------------------------------------------------------
 
 logging.basicConfig(
@@ -47,8 +50,6 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-
-# Suppress noisy httpx logs from python-telegram-bot internals
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
@@ -131,34 +132,32 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• Flipkart (`flipkart.com`)\n"
         "• Croma (`croma.com`)\n"
         "• Myntra (`myntra.com`)\n\n"
-        "💡 *How to Track:*\n"
-        "Simply send or paste a product link, or use:\n"
-        "`/track <product_url>`\n\n"
-        "Use /help to see all commands."
+        "💡 *Key Commands:*\n"
+        "• Send any product URL to track it instantly!\n"
+        "• `/watchlist` — View your tracked items\n"
+        "• `/target <id> <price>` — Set target price\n"
+        "• `/deals` — Discover top price drops\n\n"
+        "Type /help for full guide."
     )
     if update.message:
         await update.message.reply_text(welcome_message, parse_mode="Markdown")
-    logger.info("User %s triggered /start", tg_user.id if tg_user else "unknown")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/help - Show available and upcoming commands."""
+    """/help - Show available commands."""
     help_message = (
         "📖 *DealHunter Commands*\n\n"
-        "*Active:*\n"
-        "• `/start` — Start DealHunter & welcome menu\n"
-        "• `/help` — Show this help guide\n"
-        "• `/track <url>` — Track a product price & offers\n\n"
-        "*Coming Soon:*\n"
+        "• `/start` — Welcome & onboarding\n"
+        "• `/help` — Show command guide\n"
+        "• `/track <url>` — Track a product price\n"
         "• `/watchlist` — View all your tracked products\n"
-        "• `/target <price>` — Set a target price threshold\n"
-        "• `/deals` — Explore top scored price drops\n"
-        "• `/remove` — Untrack a product\n\n"
-        "Tip: You can also just paste a link directly into the chat!"
+        "• `/target <product_id> <price>` — Set target price threshold\n"
+        "• `/deals [category]` — Discover top price drops\n"
+        "• `/remove <product_id>` — Untrack a product\n\n"
+        "Tip: Send any product URL directly into chat to track it!"
     )
     if update.message:
         await update.message.reply_text(help_message, parse_mode="Markdown")
-    logger.info("User %s triggered /help", update.effective_user.id if update.effective_user else "unknown")
 
 
 async def track_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -167,7 +166,6 @@ async def track_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     text = update.message.text or ""
-    # Extract url from args or message body
     urls = URL_REGEX.findall(text)
     if not urls:
         await update.message.reply_text(
@@ -177,8 +175,188 @@ async def track_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    target_url = urls[0]
-    await process_url_tracking(update, target_url)
+    await process_url_tracking(update, urls[0])
+
+
+async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/watchlist - Display user's tracked products."""
+    if not update.message or not update.effective_user:
+        return
+
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        await update.message.reply_text("⚠️ Database is not configured for persistent watchlists.")
+        return
+
+    user_id = await ensure_db_user(update.effective_user.id, update.effective_user.username)
+    if not user_id:
+        await update.message.reply_text("⚠️ Could not load your watchlist right now.")
+        return
+
+    from database.session import get_session_factory
+    from watchlist.service import WatchlistService
+
+    svc = WatchlistService()
+    factory = get_session_factory()
+    async with factory() as session:
+        items = await svc.get_user_watchlist(session, user_id)
+
+    if not items:
+        await update.message.reply_text(
+            "📋 *Your Watchlist is Empty*\n\n"
+            "Track your first product by pasting a link or using `/track <url>`!",
+            parse_mode="Markdown",
+        )
+        return
+
+    lines = ["📋 *Your Tracked Watchlist:*\n"]
+    for idx, item in enumerate(items, start=1):
+        target_str = f"₹{item['target_price']:,.2f}" if item['target_price'] else "Not set"
+        lines.append(
+            f"*{idx}. {item['name']}*\n"
+            f"   • ID: `{item['product_id']}` | Store: {item['platform'].capitalize()}\n"
+            f"   • Price: ₹{item['current_price']:,.2f} | Target: {target_str}\n"
+            f"   • Category: {item['category']}\n"
+            f"   └ 🔗 [View Product]({item['canonical_url']})\n"
+        )
+
+    lines.append("💡 *Tip:* Use `/target <id> <price>` or `/remove <id>` to manage your watchlist.")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
+
+
+async def target_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/target <product_id> <price> - Set target price for a watched item."""
+    if not update.message or not update.effective_user:
+        return
+
+    args = context.args or []
+    if len(args) < 2:
+        await update.message.reply_text(
+            "⚠️ Usage: `/target <product_id> <target_price>`\n\n"
+            "Example: `/target 1 70000`\n"
+            "Find product IDs in your `/watchlist`.",
+            parse_mode="Markdown",
+        )
+        return
+
+    try:
+        product_id = int(args[0])
+        target_price = Decimal(args[1].replace(",", "").strip())
+    except ValueError:
+        await update.message.reply_text("⚠️ Product ID must be an integer and target price a valid number.")
+        return
+
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        await update.message.reply_text("⚠️ Database is not configured.")
+        return
+
+    user_id = await ensure_db_user(update.effective_user.id, update.effective_user.username)
+    if not user_id:
+        await update.message.reply_text("⚠️ Could not load user profile.")
+        return
+
+    from database.session import get_session_factory
+    from watchlist.service import WatchlistService
+
+    svc = WatchlistService()
+    factory = get_session_factory()
+    async with factory() as session:
+        item = await svc.set_target_price(session, user_id, product_id, target_price)
+
+    if item:
+        await update.message.reply_text(
+            f"🎯 Target price set to *₹{target_price:,.2f}* for product ID `{product_id}`!\n"
+            "You will be alerted instantly when the price hits this threshold.",
+            parse_mode="Markdown",
+        )
+    else:
+        await update.message.reply_text(f"⚠️ Product ID `{product_id}` is not in your watchlist.")
+
+
+async def deals_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/deals [category] - Discover active top price drops."""
+    if not update.message:
+        return
+
+    category_filter = " ".join(context.args).strip() if context.args else None
+
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        await update.message.reply_text("⚠️ Database is not configured for deal discovery.")
+        return
+
+    from database.session import get_session_factory
+    from deals.service import DealsService
+
+    svc = DealsService()
+    factory = get_session_factory()
+    async with factory() as session:
+        top_deals = await svc.get_top_deals(session, category=category_filter, min_drop_pct=3.0, limit=8)
+
+    if not top_deals:
+        msg = f"🔥 *No Active Deals Found*"
+        if category_filter:
+            msg += f" for category `{category_filter}`"
+        msg += "\n\nKeep tracking more products with `/track <url>` to discover price drops!"
+        await update.message.reply_text(msg, parse_mode="Markdown")
+        return
+
+    lines = ["🔥 *Top Price Drops & Deals:*\n"]
+    for idx, d in enumerate(top_deals, start=1):
+        lines.append(
+            f"*{idx}. {d['name']}*\n"
+            f"   • Store: {d['platform'].capitalize()} | Category: {d['category']}\n"
+            f"   • Price: ₹{d['current_price']:,.2f} *(Save ₹{d['drop_amount']:,.2f} / -{d['drop_pct']:.1f}%)*\n"
+            f"   └ 🔗 [View Deal]({d['canonical_url']})\n"
+        )
+
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
+
+
+async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/remove <product_id> - Untrack a product."""
+    if not update.message or not update.effective_user:
+        return
+
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "⚠️ Usage: `/remove <product_id>`\n\n"
+            "Example: `/remove 1`\n"
+            "Find product IDs in your `/watchlist`.",
+            parse_mode="Markdown",
+        )
+        return
+
+    try:
+        product_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("⚠️ Product ID must be an integer.")
+        return
+
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        await update.message.reply_text("⚠️ Database is not configured.")
+        return
+
+    user_id = await ensure_db_user(update.effective_user.id, update.effective_user.username)
+    if not user_id:
+        await update.message.reply_text("⚠️ Could not load user profile.")
+        return
+
+    from database.session import get_session_factory
+    from watchlist.service import WatchlistService
+
+    svc = WatchlistService()
+    factory = get_session_factory()
+    async with factory() as session:
+        removed = await svc.remove_from_watchlist(session, user_id, product_id)
+
+    if removed:
+        await update.message.reply_text(f"🗑️ Product ID `{product_id}` removed from your watchlist.")
+    else:
+        await update.message.reply_text(f"⚠️ Product ID `{product_id}` was not found in your watchlist.")
 
 
 async def message_url_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -188,7 +366,7 @@ async def message_url_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     text = update.message.text
     if text.startswith("/"):
-        return  # handled by command handlers
+        return
 
     urls = URL_REGEX.findall(text)
     if urls:
@@ -245,15 +423,15 @@ async def process_url_tracking(update: Update, target_url: str) -> None:
                 prod_name = product.name
                 platform_name = product.platform.capitalize()
                 canonical_link = product.canonical_url
+                prod_id = product.id
         else:
-            # Standalone extraction without DB
             prod_data, obs = await service.get_or_fetch_observation(source, target_url)
             prod_name = prod_data.name
             platform_name = source.name.capitalize()
             canonical_link = prod_data.canonical_url
+            prod_id = "N/A"
             is_new = True
 
-        # Format price response
         stock_badge = "✅ In Stock" if obs.in_stock else "🔴 Currently Out of Stock"
         discount_lines = []
         if obs.coupon:
@@ -266,16 +444,18 @@ async def process_url_tracking(update: Update, target_url: str) -> None:
         if obs.effective_price < obs.price:
             eff_line = f"\n🔥 *Effective Price:* ₹{obs.effective_price:,.2f}"
 
-        action_title = "🎯 *Product Added to Tracking!*" if is_new else "🔄 *Price Observation Updated!*"
+        action_title = "🎯 *Product Added to Watchlist!*" if is_new else "🔄 *Price Observation Updated!*"
 
         card = (
             f"{action_title}\n\n"
             f"📦 *{prod_name}*\n"
+            f"🆔 *Product ID:* `{prod_id}`\n"
             f"🏪 *Store:* {platform_name}\n"
             f"💰 *Listed Price:* ₹{obs.price:,.2f}"
             f"{eff_line}"
             f"{discount_block}\n"
             f"📊 *Status:* {stock_badge}\n\n"
+            f"💡 *Set Target Price:* `/target {prod_id} <desired_price>`\n"
             f"🔗 [View Product on {platform_name}]({canonical_link})"
         )
 
@@ -299,11 +479,6 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
     if update.message:
         await update.message.reply_text(response)
-    logger.info(
-        "User %s sent unknown command: %s",
-        update.effective_user.id if update.effective_user else "unknown",
-        update.message.text if update.message else "unknown",
-    )
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -325,6 +500,10 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("track", track_command))
+    app.add_handler(CommandHandler("watchlist", watchlist_command))
+    app.add_handler(CommandHandler("target", target_command))
+    app.add_handler(CommandHandler("deals", deals_command))
+    app.add_handler(CommandHandler("remove", remove_command))
 
     # Handle text messages with links
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_url_handler))
@@ -335,7 +514,7 @@ def main() -> None:
     # Global error handler
     app.add_error_handler(error_handler)
 
-    print("DealHunter is running with Product Tracking...")
+    print("DealHunter is running with Watchlist & Deals support...")
     logger.info("DealHunter bot started. Polling for updates.")
 
     # Start polling
