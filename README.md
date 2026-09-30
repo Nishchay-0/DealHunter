@@ -7,19 +7,25 @@ A Telegram-first deal and price-drop alert platform.
 ## Current Status
 
 ```
-Phase 2 Complete — Database Models, Alembic Migrations & FastAPI Backend Foundation
+Phase 3 Complete — Product Tracking Engine (Amazon, Flipkart, Croma, Myntra) & Live Telegram Integration
 ```
 
 ---
 
 ## Features (Current)
 
-* **Telegram Bot**: Fully async bot powered by `python-telegram-bot` v22+ with `/start`, `/help`, and graceful fallback handling.
-* **Database Layer**: SQLAlchemy 2.0 async ORM models covering Users, Products, Price History, Watchlists, Alerts Sent, Offers, Sources, and Audit Logs.
-* **Alembic Migrations**: Fully async, version-controlled schema migrations with support for online/offline execution.
-* **Backend API**: FastAPI foundation with `/health` liveness probe and async database ping.
+* **Telegram Bot**: Fully async bot powered by `python-telegram-bot` v22+ with `/start`, `/help`, and `/track <url>` commands.
+* **Direct URL Tracking**: Send or paste any product link from Amazon, Flipkart, Croma, or Myntra directly into the chat.
+* **Retailer Price Sources**:
+  * **Amazon India** (`amazon.in`): Extracts ASIN, title, listed price, coupon discounts, seller info, and stock status.
+  * **Flipkart** (`flipkart.com`): Extracts PID, item metadata, listed price, bank offers, and stock status.
+  * **Croma** (`croma.com`): Extracts product code, catalog metadata, price, and availability.
+  * **Myntra** (`myntra.com`): Extracts style ID, product name, price, and availability.
+* **Database & Price History**: SQLAlchemy 2.0 async ORM tracking products, historical price observations, effective prices, and user watchlists.
+* **Alembic Migrations**: Fully async schema migrations.
+* **Backend API**: FastAPI foundation with `/health` liveness probe.
 * **System Diagnostics**: Safe CLI diagnostics tool (`scripts/diagnose.py`) with masked credentials.
-* **Automated Offline Tests**: Test suite using `pytest`, `pytest-asyncio`, and in-memory SQLite (`aiosqlite`) ensuring 100% offline testability.
+* **Automated Offline Tests**: 21 unit and integration tests passing 100% offline using `pytest` and in-memory SQLite.
 
 ---
 
@@ -127,16 +133,28 @@ DealHunter/
 ├── backend/                      # FastAPI application
 │   └── main.py                   # Health check & API entry point
 ├── bot/                          # Telegram bot interface
-│   └── telegram_bot.py           # Commands (/start, /help)
+│   └── telegram_bot.py           # Commands (/start, /help, /track, direct URL handling)
 ├── database/                     # Database layer
 │   ├── base.py                   # Declarative base
 │   ├── models.py                 # SQLAlchemy 2.0 ORM models
 │   └── session.py                # Async engine & session factory
+├── products/                     # Product catalog & price tracking
+│   ├── models.py                 # ProductData & PriceObservation dataclasses
+│   ├── service.py                # ProductTrackingService (catalog + history)
+│   └── sources/                  # Retailer adapters
+│       ├── base.py               # PriceSource ABC
+│       ├── amazon.py             # Amazon India adapter
+│       ├── flipkart.py           # Flipkart adapter
+│       ├── croma.py              # Croma adapter
+│       ├── myntra.py             # Myntra adapter
+│       └── registry.py           # URL → Source resolution
 ├── scripts/                      # Operational utilities
 │   └── diagnose.py               # Masked system diagnostics
 ├── tests/                        # Offline automated test suite
 │   ├── api/                      # API contract tests
 │   ├── database/                 # ORM & database tests
+│   ├── fixtures/                 # Offline HTML retailer fixtures
+│   ├── products/                 # Parser, registry & service tests
 │   └── conftest.py               # Async fixtures & in-memory DB
 ├── .env.example                  # Environment configuration template
 ├── .gitignore                    # Excludes secrets, cache, venv
@@ -154,8 +172,8 @@ DealHunter/
 |-------|-------------|--------|
 | 1 | Telegram Bot Foundation (`/start`, `/help`) | ✅ Complete |
 | 2 | FastAPI + PostgreSQL/SQLite Models + Alembic Migrations | ✅ Complete |
-| 3 | Product Tracking (URL → Source Parser → History) | 🔜 Next (Awaiting Approval) |
-| 4 | Scheduler + Price-Drop Detection + Notifications | ⏳ Pending |
+| 3 | Product Tracking (URL → Source Parser → Product Catalog → Current Price & History) | ✅ Complete |
+| 4 | Scheduler + Price-Drop Detection + Notifications | 🔜 Next (Awaiting Approval) |
 | 5 | Watchlist + Target Price + `/deals` | ⏳ Pending |
 | 6 | Deal Analysis Engine (Deal Score & Breakdown) | ⏳ Pending |
 | 7 | Coupons, Effective Price & Offer Stacking | ⏳ Pending |
@@ -164,8 +182,14 @@ DealHunter/
 
 ---
 
-## Security & Privacy Compliance
+## Security & Compliance Declarations
 
-* **No Secrets Committed**: `.env` and sensitive credentials are excluded via `.gitignore`.
-* **Zero Secret Leakage in Logs**: All diagnostics and logging utilities mask tokens and connection credentials.
-* **Compliance Grounding**: Respects data protection principles (DPDP Act, GDPR) and retailer terms.
+| Retailer | Access Method | Permission Rationale | Status |
+|----------|---------------|----------------------|--------|
+| **Amazon India** | `public_page_read` | Publicly readable Open Graph & JSON-LD microdata; throttled & rate-limited | Enabled |
+| **Flipkart** | `public_page_read` | Publicly readable schema & Open Graph tags; throttled & rate-limited | Enabled |
+| **Croma** | `public_page_read` | Public catalog metadata & JSON-LD; polite rate limit | Enabled |
+| **Myntra** | `public_page_read` | Public catalog metadata & Open Graph; polite rate limit | Enabled |
+
+* **Zero Secret Leakage**: All credentials masked in logs and diagnostics.
+* **Zero Live CI Calls**: 100% of test fixtures run offline.
